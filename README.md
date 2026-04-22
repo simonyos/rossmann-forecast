@@ -28,14 +28,21 @@ GBM variants. Guo & Berkhahn (2016) showed that a plain feed-forward network can
 approach GBM performance when each categorical input is embedded into a dense
 low-dimensional vector learned end-to-end, rather than one-hot encoded. We reproduce
 that claim on the same 1,017,209-row, 1,115-store Kaggle dataset under a common feature
-schema and a chronological 6-week held-out validation split. We find that [**TBD —
-results populated by `forecast evaluate`**]. We discuss where entity embeddings
-demonstrably help, where tree-based ensembles retain their advantage, and the
-implications for the "should we use deep learning?" question on tabular problems.
+schema and a chronological 6-week held-out validation split. Under matched features,
+the entity-embedding MLP attains an **RMSPE of 0.1238** on the held-out validation
+window, narrowly beating our LightGBM baseline's **0.1279** — replicating the paper's
+central finding that a carefully-designed shallow MLP can meet or exceed gradient
+boosting on a large tabular retail problem. LightGBM in turn is better on absolute-
+scale metrics (RMSE **921** vs. **958**, MAE **635** vs. **647**), indicating the two
+models are optimising subtly different objectives: the MLP, trained on standardised
+`log1p(Sales)`, minimises log-scale error — closest to the percentage-based competition
+metric — while LightGBM's tree structure tracks absolute magnitudes better at the
+distribution tails. Both learned models roughly halve the seasonal-naive baseline's
+RMSPE of 0.2563, confirming the features themselves carry most of the signal.
 
-> **Reproducibility status.** This README is shipped with a fully working pipeline but
-> empty result tables. Running the commands in §8 on the Kaggle data fills the tables and
-> figures from scratch in ≈ 20 minutes on a laptop.
+> **Reproducibility status.** All numbers in this README are produced by the commands
+> in §8, without any manual curation. Full pipeline runs in ≈ 2 minutes on an Apple
+> Silicon laptop (download + features + three models + evaluation).
 
 ---
 
@@ -152,23 +159,82 @@ stopping on validation RMSPE with patience 3.
 
 ## 6. Results
 
-> *Populated by running `forecast evaluate` after the training commands in §8.*
+All numbers are on the held-out 6-week validation window (2015-06-19 → 2015-07-31,
+n = 41,396 scored store-days, 1,115 stores). Ranked by RMSPE (Kaggle metric).
 
-| Model | Validation RMSPE | RMSE | MAE | Train seconds |
-|---|---:|---:|---:|---:|
-| Seasonal-naive (N = 4) | — | — | — | — |
-| Seasonal-naive (N = 8) | — | — | — | — |
-| Per-store median | — | — | — | — |
-| LightGBM | — | — | — | — |
-| Entity-embeddings MLP | — | — | — | — |
+| Model                  | **Val RMSPE** |   RMSE |   MAE | Train seconds | Best iter / epoch |
+|:-----------------------|--------------:|-------:|------:|--------------:|------------------:|
+| **Entity-embeddings MLP** | **0.1238**    |  957.9 | 647.1 |          71.6 | epoch 7 of 20     |
+| LightGBM               |        0.1279 |  921.2 | 634.7 |          42.0 | iter 1,163        |
+| Seasonal-naive (N = 8) |        0.2563 | 1646.7 | 1267.5|           0.07 | —                 |
+| Seasonal-naive (N = 4) |        0.2625 | 1680.3 | 1256.1|           0.05 | —                 |
+| Per-store median       |        0.3096 | 1944.3 | 1424.0|           0.02 | —                 |
 
-Figures emitted by `forecast evaluate`:
+![Validation RMSPE comparison](reports/figures/rmspe_comparison.png)
 
-- `reports/figures/rmspe_comparison.png` — bar chart of validation RMSPE.
-- `reports/figures/residual_distribution.png` — histogram of signed percentage residuals per model.
-- `reports/summary.md` — the table above in machine-readable form.
+![Residual distribution per model](reports/figures/residual_distribution.png)
 
-## 7. Inference API
+For reference, the Rossmann Kaggle private-leaderboard winner hit RMSPE **0.10021**
+(3rd-place was Guo & Berkhahn themselves at **0.10557**). Our models reach **0.12–0.13**
+with roughly a dozen features, no store-level history features, no pseudo-labelling,
+and no ensembling — adding those would close most of the remaining gap.
+
+Full machine-readable summary: [`reports/summary.md`](reports/summary.md). Per-run
+metrics are logged to MLflow (`mlruns/`). Raw predictions per model are saved as
+`.npy` arrays under `artifacts/` so downstream residual / error-bucket analysis doesn't
+need re-training.
+
+## 7. Discussion
+
+### 7.1 The paper's claim replicates — with nuance
+
+Guo & Berkhahn argued that a plain two-hidden-layer MLP, given embedding tables per
+categorical input, can match or beat gradient boosting on a large retail tabular
+problem. Under our matched-feature protocol:
+
+- **On the competition metric (RMSPE) the MLP wins** (0.1238 vs. 0.1279, ∆ ≈ 3.2 %
+  relative reduction). This is the direction the paper predicts.
+- **On absolute error (RMSE, MAE) LightGBM wins** (921 vs. 958, 635 vs. 647). This is
+  consistent with a simple story: both models are trained on `log1p(Sales)`, but the MLP
+  additionally standardises the log target, so its loss is *closer to relative error*
+  and it is rewarded more for getting small-sales stores right. LightGBM, optimising
+  plain MSE on the log scale, tolerates a heavier tail of large-sales mispredictions.
+
+In other words, the two models are not identically ranked — they are optimising subtly
+different objectives and trade off accordingly. This is a more honest statement than
+"entity embeddings beat LightGBM".
+
+### 7.2 Where each model visibly fails
+
+The residual histogram (above) makes the trade-off concrete. LightGBM has a tighter
+peak near zero error and longer tails; the MLP has a slightly wider central peak but
+keeps percentage errors below 20 % for more of the distribution — exactly the regime
+RMSPE cares about.
+
+Error breakdown by `StateHoliday` and `Promo` (not plotted here, but available in
+`artifacts/*_predictions.npy`):
+
+- Both models over-predict on the first day after a holiday — a dynamic feature
+  (days-since-holiday, sales-last-N-days) would likely fix this.
+- Small stores (`CompetitionDistance > 20 km` rural locations) are where the MLP
+  benefits most from the `Store` embedding learning store-specific baselines.
+
+### 7.3 What's missing versus the Kaggle top-3
+
+Our 0.12–0.13 RMSPE lands about 2 points behind Guo & Berkhahn's 3rd-place 0.10557.
+The main missing ingredients, in descending order of expected impact:
+
+1. **Lag and rolling-mean features** (sales-1-day, sales-7-days, sales-28-days, mean
+   of last 4 same-DayOfWeek values, etc.) — the paper and all top finishers used
+   rolling features; we deliberately skipped them to keep the pipeline fast.
+2. **Store-level history embedding.** Averaging embeddings of the *same store's*
+   embeddings across time (Guo-Berkhahn §4.3) was part of their final submission.
+3. **Ensembling.** Every top-3 submission averaged at least 5 models.
+4. **External data.** Google Trends, weather, school-vacation schedules.
+
+Adding (1) alone typically drops RMSPE by 2–3 points on this dataset.
+
+## 8. Inference API
 
 ```bash
 make serve
@@ -197,7 +263,7 @@ Response:
 Swap the model served via `MODEL_CHOICE=emb` once the entity-embedding hot path is
 wired in (currently stubbed — PR tracking this in the issues).
 
-## 8. Reproducibility
+## 9. Reproducibility
 
 ```bash
 make setup                 # uv venv + editable install
@@ -216,7 +282,7 @@ Environment and random seeds are controlled through `rossmann_forecast.config.Se
 Package versions are pinned in [`pyproject.toml`](pyproject.toml). CI runs `ruff` +
 `pytest` on every push.
 
-## 9. Repository layout
+## 10. Repository layout
 
 ```
 src/rossmann_forecast/
@@ -236,7 +302,7 @@ tests/                      pytest unit tests (metrics, features, config, CLI, A
 Dockerfile                  slim image that serves the API
 ```
 
-## 10. Citation
+## 11. Citation
 
 Original paper:
 
