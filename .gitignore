@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.Python
+
+# Env
+.env
+.env.local
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Experiment tracking
+mlruns/
+mlartifacts/
+wandb/
+
+# Data & artifacts
+data/raw/
+data/interim/
+data/processed/
+artifacts/
+*.pt
+*.pth
+*.joblib
+*.pkl
+*.parquet
+*.feather
+
+# Kaggle
+~/.kaggle/kaggle.json
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/

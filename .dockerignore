@@ -1,0 +1,13 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+data
+artifacts
+mlruns
+notebooks
+.pytest_cache
+.ruff_cache
+.github
+.DS_Store
